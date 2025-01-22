@@ -9,9 +9,13 @@
 #define LOAD_FACTOR 0.75
 #define RESIZE_FACTOR 2
 #define DEFAULT_CAPACITY 16
+#define HT_MIN_CAPACITY 8
 
-static size_t _default_hash(void *ket);
-static int _ht_resize(hashtable *ht, size_t new_capacity);
+// Global debug flag
+bool ht_debug_enabled = false;
+
+#define DEBUG_PRINT(fmt, ...) \
+    do { if (ht_debug_enabled) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
 /**
  * @brief Create a new hashtable. If no hash function is provided, a default hash function for strings is used (djb2).
@@ -34,6 +38,10 @@ hashtable *ht_create(size_t capacity, size_t (*hash)(void *), bool (*equals)(voi
 
     if (capacity == 0) {
         capacity = DEFAULT_CAPACITY;
+    }
+
+    if (capacity < HT_MIN_CAPACITY) {
+        capacity = HT_MIN_CAPACITY;
     }
 
     if (hash == NULL) {
@@ -98,13 +106,13 @@ void ht_destroy(hashtable *ht) {
  */
 int ht_insert(hashtable *ht, void *key, void *value) {
     if (ht == NULL || key == NULL) {
-        fprintf(stderr, "[-] Hashtable or key is NULL\n");
+        DEBUG_PRINT("[-] Hashtable or key is NULL\n");
         return -1;
     }
 
     if (ht->size >= ht->capacity * LOAD_FACTOR) {
         if (_ht_resize(ht, ht->capacity * RESIZE_FACTOR) != 0) {
-            fprintf(stderr, "[-] Failed to resize hashtable\n");
+            DEBUG_PRINT("[-] Failed to resize hashtable\n");
             return -1;
         }
     }
@@ -138,7 +146,7 @@ int ht_insert(hashtable *ht, void *key, void *value) {
  */
 int ht_remove(hashtable *ht, void *key) {
     if (ht == NULL || key == NULL) {
-        fprintf(stderr, "[-] Hashtable or key is NULL\n");
+        DEBUG_PRINT("[-] Hashtable or key is NULL\n");
         return -1;
     }
 
@@ -158,7 +166,7 @@ int ht_remove(hashtable *ht, void *key) {
 
             if (ht->size < ht->capacity * (1 - LOAD_FACTOR)) {
                 if (_ht_resize(ht, ht->capacity / RESIZE_FACTOR) != 0) {
-                    fprintf(stderr, "[-] Failed to resize hashtable\n");
+                    DEBUG_PRINT("[-] Failed to resize hashtable\n");
                     return -1;
                 }
             }
@@ -168,7 +176,7 @@ int ht_remove(hashtable *ht, void *key) {
         index = (index + 1) % ht->capacity;
     }
 
-    fprintf(stderr, "[!] Key not found\n");
+    DEBUG_PRINT("[!] Key not found\n");
     return -1;  // Key not found
 }
 
@@ -181,20 +189,26 @@ int ht_remove(hashtable *ht, void *key) {
  */
 void *ht_get(hashtable *ht, void *key) {
     if (ht == NULL || key == NULL) {
-        fprintf(stderr, "[-] Hashtable or key is NULL\n");
+        DEBUG_PRINT("[-] Hashtable or key is NULL\n");
         return NULL;
     }
 
     size_t index = ht->hash(key) % ht->capacity;
-    while (ht->entries[index].key != NULL) {
-        if (ht->equals(ht->entries[index].key, key)) {
-            fprintf(stderr, "[+] Found key\n");
+    size_t start_index = index;
+    
+    do {
+        if (ht->entries[index].key == NULL && !ht->entries[index].is_deleted) {
+            DEBUG_PRINT("[!] Key not found\n");
+            return NULL;
+        }
+        if (ht->entries[index].key != NULL && ht->equals(ht->entries[index].key, key)) {
+            DEBUG_PRINT("[+] Found key at index %zu\n", index);
             return ht->entries[index].value;
         }
         index = (index + 1) % ht->capacity;
-    }
+    } while (index != start_index);
 
-    fprintf(stderr, "[!] Key not found\n");
+    DEBUG_PRINT("[!] Key not found (table full)\n");
     return NULL;
 }
 
@@ -207,25 +221,33 @@ void *ht_get(hashtable *ht, void *key) {
  */
 static int _ht_resize(hashtable *ht, size_t new_capacity) {
     if (ht == NULL) {
-        fprintf(stderr, "[-] Hashtable is NULL\n");
+        DEBUG_PRINT("[-] Hashtable is NULL\n");
         return -1;
     }
+
+    // Enforce minimum capacity
+    if (new_capacity < HT_MIN_CAPACITY) {
+        new_capacity = HT_MIN_CAPACITY;
+    }
+
+    DEBUG_PRINT("[+] Resizing from %zu to %zu\n", ht->capacity, new_capacity);
 
     // Allocate new entries array
     ht_entry *new_entries = calloc(new_capacity, sizeof(ht_entry));
     if (new_entries == NULL) {
-        fprintf(stderr, "[-] Failed to allocate new entries array\n");
+        DEBUG_PRINT("[-] Failed to allocate new entries array\n");
         return -1;
     }
 
     // Rehash all entries
     for (size_t i = 0; i < ht->capacity; i++) {
-        if (ht->entries[i].key != NULL) {
+        if (ht->entries[i].key != NULL && !ht->entries[i].is_deleted) {
             size_t index = ht->hash(ht->entries[i].key) % new_capacity;
             while (new_entries[index].key != NULL) {
                 index = (index + 1) % new_capacity;
             }
             new_entries[index] = ht->entries[i];
+            new_entries[index].is_deleted = false;  // Reset deleted flag
         }
     }
 
@@ -254,4 +276,63 @@ static size_t _default_hash(void *key) {
         hash = ((hash << 5) + hash) + c;
     }
     return hash;
+}
+
+// New utility functions
+float ht_load_factor(hashtable *ht) {
+    if (ht == NULL) return 0.0f;
+    return (float)ht->size / (float)ht->capacity;
+}
+
+size_t ht_size(hashtable *ht) {
+    return ht ? ht->size : 0;
+}
+
+size_t ht_capacity(hashtable *ht) {
+    return ht ? ht->capacity : 0;
+}
+
+void ht_clear(hashtable *ht) {
+    if (ht == NULL) return;
+    
+    for (size_t i = 0; i < ht->capacity; i++) {
+        if (ht->entries[i].key != NULL) {
+            if (ht->key_free != NULL) {
+                ht->key_free(ht->entries[i].key);
+            }
+            if (ht->val_free != NULL) {
+                ht->val_free(ht->entries[i].value);
+            }
+            ht->entries[i].key = NULL;
+            ht->entries[i].value = NULL;
+            ht->entries[i].is_deleted = false;
+        }
+    }
+    ht->size = 0;
+}
+
+// Iterator implementation
+typedef struct {
+    hashtable *ht;
+    size_t index;
+} ht_iterator;
+
+ht_iterator ht_iterator_create(hashtable *ht) {
+    ht_iterator it = {ht, 0};
+    return it;
+}
+
+bool ht_iterator_next(ht_iterator *it, void **key, void **value) {
+    if (it == NULL || it->ht == NULL) return false;
+    
+    while (it->index < it->ht->capacity) {
+        if (it->ht->entries[it->index].key != NULL && !it->ht->entries[it->index].is_deleted) {
+            *key = it->ht->entries[it->index].key;
+            *value = it->ht->entries[it->index].value;
+            it->index++;
+            return true;
+        }
+        it->index++;
+    }
+    return false;
 }

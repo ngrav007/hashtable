@@ -24,6 +24,24 @@ typedef struct hashtable {
     void (*val_free)(void *);
 } hashtable;
 
+// Debug control
+extern bool ht_debug_enabled;
+
+// Additional utility functions
+float ht_load_factor(hashtable *ht);
+size_t ht_size(hashtable *ht);
+size_t ht_capacity(hashtable *ht);
+void ht_clear(hashtable *ht);
+
+// Iterator interface
+typedef struct ht_iterator {
+    hashtable *ht;
+    size_t index;
+} ht_iterator;
+
+ht_iterator ht_iterator_create(hashtable *ht);
+bool ht_iterator_next(ht_iterator *it, void **key, void **value);
+
 hashtable *ht_create(size_t capacity, size_t (*hash)(void *), bool (*equals)(void *, void *), void (*key_free)(void *), void (*val_free)(void *));
 void ht_destroy(hashtable *ht);
 int ht_insert(hashtable *ht, void *key, void *value);
