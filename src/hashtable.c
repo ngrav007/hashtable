@@ -6,6 +6,10 @@
 
 #include "hashtable.h"
 
+// Forward declarations
+static size_t _default_hash(void *key);
+static int _ht_resize(hashtable *ht, size_t new_capacity);
+
 #define LOAD_FACTOR 0.75
 #define RESIZE_FACTOR 2
 #define DEFAULT_CAPACITY 16
@@ -96,7 +100,8 @@ void ht_destroy(hashtable *ht) {
 }
 
 /**
- * @brief Insert a key-value pair into the hashtable. If the key already exists, the value is updated. If the load
+ * @brief Insert a key-value pair into the hashtable. If the key already exists, the value is updated and the old value
+ *  is freed if val_free is provided, but the key is not freed (the same key object is reused). If the load
  *  factor exceeds LOAD_FACTOR, the hashtable is resized to RESIZE_FACTOR * capacity.
  * 
  * @param[in] ht The hashtable to insert into
@@ -118,20 +123,40 @@ int ht_insert(hashtable *ht, void *key, void *value) {
     }
 
     size_t index = ht->hash(key) % ht->capacity;
-    while (ht->entries[index].key != NULL) {
-        if (ht->equals(ht->entries[index].key, key)) {
+    size_t first_deleted = -1; // Track first deleted slot
+    
+    while (ht->entries[index].key != NULL || ht->entries[index].is_deleted) {
+        // If we found a deleted slot and haven't saved one yet, remember it
+        if (ht->entries[index].is_deleted && first_deleted == (size_t)-1) {
+            first_deleted = index;
+        }
+        
+        // If we found the key, update its value
+        if (ht->entries[index].key != NULL && ht->equals(ht->entries[index].key, key)) {
             if (ht->val_free != NULL) {
                 ht->val_free(ht->entries[index].value);
             }
             ht->entries[index].value = value;
+            ht->entries[index].is_deleted = false; // Ensure it's not marked as deleted
             return 0;
         }
+        
         index = (index + 1) % ht->capacity;
+    }
+    
+    // If we found a deleted slot earlier, use that instead of an empty slot
+    if (first_deleted != (size_t)-1) {
+        index = first_deleted;
     }
 
     ht->entries[index].key = key;
     ht->entries[index].value = value;
-    ht->size++;
+    ht->entries[index].is_deleted = false;
+    
+    // Only increment size if we're not reusing a deleted slot
+    if (first_deleted == (size_t)-1) {
+        ht->size++;
+    }
     return 0;
 }
 
@@ -240,6 +265,7 @@ static int _ht_resize(hashtable *ht, size_t new_capacity) {
     }
 
     // Rehash all entries
+    size_t actual_size = 0;
     for (size_t i = 0; i < ht->capacity; i++) {
         if (ht->entries[i].key != NULL && !ht->entries[i].is_deleted) {
             size_t index = ht->hash(ht->entries[i].key) % new_capacity;
@@ -248,8 +274,12 @@ static int _ht_resize(hashtable *ht, size_t new_capacity) {
             }
             new_entries[index] = ht->entries[i];
             new_entries[index].is_deleted = false;  // Reset deleted flag
+            actual_size++;
         }
     }
+    
+    // Update size to reflect actual number of entries after rehashing
+    ht->size = actual_size;
 
     // Free old entries and update hashtable
     free(ht->entries);
@@ -310,12 +340,6 @@ void ht_clear(hashtable *ht) {
     }
     ht->size = 0;
 }
-
-// Iterator implementation
-typedef struct {
-    hashtable *ht;
-    size_t index;
-} ht_iterator;
 
 ht_iterator ht_iterator_create(hashtable *ht) {
     ht_iterator it = {ht, 0};
