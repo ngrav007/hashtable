@@ -3,6 +3,9 @@
 #include <string.h>
 #include "hashtable.h"
 
+// Define the minimum capacity constant to match the one in hashtable.c
+#define HT_MIN_CAPACITY 8
+
 bool string_equals(void *a, void *b) {
     return strcmp((char*)a, (char*)b) == 0;
 }
@@ -129,7 +132,7 @@ TEST(HashTableTest, RemoveAndShrink) {
         ht_remove(ht, key);
     }
 
-    ASSERT_LT(ht->capacity, 8); // Assuming the table shrinks when below LOAD_FACTOR
+    ASSERT_EQ(ht->capacity, HT_MIN_CAPACITY); // The table should shrink to minimum capacity
 
     ht_destroy(ht);
 }
